@@ -580,20 +580,26 @@ if transport.IsRecoverableError(err) {
 ## 实现状态
 
 ### ✅ 已完成
-- [x] 核心接口定义
+- [x] 核心接口定义（Transport/Server/Client）
+- [x] 扩展接口定义（TransportEx，支持MPMC）
 - [x] 消息格式定义
 - [x] 编解码器接口
 - [x] 错误类型定义
-- [x] 配置结构
+- [x] 配置结构（含MPMC配置）
+- [x] MPMC支持（接口层面）
+- [x] 消息确认机制（接口）
+- [x] 分区策略（配置）
+- [x] 负载均衡策略（配置）
 
 ### 🚧 进行中
-- [ ] 共享内存实现
+- [ ] 共享内存SPSC实现
+- [ ] 共享内存MPMC实现（多Ring Buffer分区）
 - [ ] gRPC实现
 - [ ] RESTful实现
 - [ ] Unix Socket实现
 
 ### 📅 计划中
-- [ ] 编解码器实现（JSON/Protobuf/MessagePack）
+- [ ] 编解码器实现（JSON/Protobuf/MessagePack/Binary）
 - [ ] 压缩支持
 - [ ] 加密支持
 - [ ] 连接池

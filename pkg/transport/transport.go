@@ -36,6 +36,7 @@ type Transport interface {
 	// ctx: 上下文控制
 	// timeout: 超时时间，0表示阻塞等待
 	// 返回: 接收到的消息和error
+	// 注意: MPMC模式下，消息需要手动确认（调用Acknowledge）
 	Receive(ctx context.Context, timeout time.Duration) (*Message, error)
 
 	// Request 请求-响应模式（同步）
@@ -82,6 +83,58 @@ type Transport interface {
 
 	// Close 关闭传输层（实现io.Closer接口）
 	Close() error
+}
+
+// TransportEx 扩展传输接口（可选，用于MPMC等高级特性）
+// 实现此接口的传输层可提供额外的功能
+type TransportEx interface {
+	Transport // 继承基础接口
+
+	// Acknowledge 确认消息已处理（MPMC竞争消费模式）
+	// msg: 要确认的消息
+	// 返回: error
+	// 注意: 只有在MPMC模式下需要手动确认，SPSC模式自动确认
+	Acknowledge(msg *Message) error
+
+	// Nack 否认消息（处理失败，重新入队）
+	// msg: 要否认的消息
+	// requeue: 是否重新入队
+	// 返回: error
+	Nack(msg *Message, requeue bool) error
+
+	// SendToPartition 发送到指定分区
+	// ctx: 上下文控制
+	// msg: 消息
+	// partition: 分区ID
+	// 返回: error
+	SendToPartition(ctx context.Context, msg *Message, partition int) error
+
+	// ReceiveFromPartition 从指定分区接收
+	// ctx: 上下文控制
+	// partition: 分区ID
+	// timeout: 超时时间
+	// 返回: 消息和error
+	ReceiveFromPartition(ctx context.Context, partition int, timeout time.Duration) (*Message, error)
+
+	// GetPartitionCount 获取分区数量
+	// 返回: 分区数量
+	GetPartitionCount() int
+
+	// GetConsumerID 获取消费者ID
+	// 返回: 消费者ID，如果是生产者返回-1
+	GetConsumerID() int
+
+	// GetConsumerGroup 获取消费者组名称
+	// 返回: 消费者组名称
+	GetConsumerGroup() string
+
+	// GetPendingMessageCount 获取待处理消息数量
+	// 返回: 待处理消息数量
+	GetPendingMessageCount() uint64
+
+	// GetProcessingMessageCount 获取正在处理的消息数量
+	// 返回: 正在处理的消息数量
+	GetProcessingMessageCount() uint64
 }
 
 // Server 服务端接口
@@ -245,6 +298,77 @@ const (
 	TransportTypeUnix TransportType = "unix"
 )
 
+// ConcurrencyMode 并发模式
+type ConcurrencyMode string
+
+const (
+	// ConcurrencyModeSPSC 单生产者单消费者（默认，最高性能）
+	ConcurrencyModeSPSC ConcurrencyMode = "spsc"
+
+	// ConcurrencyModeSPMC 单生产者多消费者
+	ConcurrencyModeSPMC ConcurrencyMode = "spmc"
+
+	// ConcurrencyModeMPSC 多生产者单消费者
+	ConcurrencyModeMPSC ConcurrencyMode = "mpsc"
+
+	// ConcurrencyModeMPMC 多生产者多消费者
+	ConcurrencyModeMPMC ConcurrencyMode = "mpmc"
+)
+
+// TransportRole 传输角色
+type TransportRole string
+
+const (
+	// RoleProducer 生产者角色
+	RoleProducer TransportRole = "producer"
+
+	// RoleConsumer 消费者角色
+	RoleConsumer TransportRole = "consumer"
+
+	// RoleBoth 同时作为生产者和消费者
+	RoleBoth TransportRole = "both"
+)
+
+// PartitionStrategy 分区策略
+type PartitionStrategy string
+
+const (
+	// PartitionStrategyHash 基于消息哈希分区（保证相同key的消息到同一分区）
+	PartitionStrategyHash PartitionStrategy = "hash"
+
+	// PartitionStrategyRoundRobin 轮询分区（均匀分布）
+	PartitionStrategyRoundRobin PartitionStrategy = "round_robin"
+
+	// PartitionStrategyRandom 随机分区
+	PartitionStrategyRandom PartitionStrategy = "random"
+
+	// PartitionStrategySticky 粘性分区（同一生产者总是使用同一分区）
+	PartitionStrategySticky PartitionStrategy = "sticky"
+
+	// PartitionStrategyManual 手动指定分区（通过SendToPartition）
+	PartitionStrategyManual PartitionStrategy = "manual"
+)
+
+// LoadBalancePolicy 负载均衡策略
+type LoadBalancePolicy string
+
+const (
+	// LoadBalancePolicyRoundRobin 轮询（按顺序从各分区读取）
+	LoadBalancePolicyRoundRobin LoadBalancePolicy = "round_robin"
+
+	// LoadBalancePolicyRandom 随机选择分区
+	LoadBalancePolicyRandom LoadBalancePolicy = "random"
+
+	// LoadBalancePolicyLeastLoad 选择负载最低的分区
+	LoadBalancePolicyLeastLoad LoadBalancePolicy = "least_load"
+
+	// LoadBalancePolicyFanout 扇出（从所有分区读取，广播模式）
+	LoadBalancePolicyFanout LoadBalancePolicy = "fanout"
+
+	// LoadBalancePolicySticky 粘性（消费者绑定固定分区）
+	LoadBalancePolicySticky LoadBalancePolicy = "sticky"
+)
+
 // TransportConfig 传输配置
 type TransportConfig struct {
 	// Type 传输类型
@@ -285,6 +409,47 @@ type TransportConfig struct {
 
 	// KeepAlive 保活配置
 	KeepAlive *KeepAliveConfig `json:"keep_alive,omitempty" yaml:"keep_alive,omitempty"`
+
+	// ===== MPMC相关配置 =====
+
+	// ConcurrencyMode 并发模式
+	ConcurrencyMode ConcurrencyMode `json:"concurrency_mode" yaml:"concurrency_mode"`
+
+	// Role 角色（生产者/消费者）
+	Role TransportRole `json:"role" yaml:"role"`
+
+	// ProducerID 生产者ID（多生产者场景）
+	ProducerID int `json:"producer_id" yaml:"producer_id"`
+
+	// ConsumerID 消费者ID（多消费者场景，-1表示自动分配）
+	ConsumerID int `json:"consumer_id" yaml:"consumer_id"`
+
+	// ConsumerGroup 消费者组名称（用于负载均衡）
+	ConsumerGroup string `json:"consumer_group" yaml:"consumer_group"`
+
+	// PartitionCount 分区数量（MPMC模式使用）
+	PartitionCount int `json:"partition_count" yaml:"partition_count"`
+
+	// PartitionStrategy 分区策略
+	PartitionStrategy PartitionStrategy `json:"partition_strategy" yaml:"partition_strategy"`
+
+	// LoadBalancePolicy 负载均衡策略
+	LoadBalancePolicy LoadBalancePolicy `json:"load_balance_policy" yaml:"load_balance_policy"`
+
+	// AutoAcknowledge 是否自动确认消息（false需要手动调用Acknowledge）
+	AutoAcknowledge bool `json:"auto_acknowledge" yaml:"auto_acknowledge"`
+
+	// AckTimeout 消息确认超时时间（超时未确认则重新入队）
+	AckTimeout time.Duration `json:"ack_timeout" yaml:"ack_timeout"`
+
+	// MaxRetries 最大重试次数（消息处理失败后重试）
+	MaxRetries int `json:"max_retries" yaml:"max_retries"`
+
+	// HeartbeatInterval 心跳间隔（消费者向系统报告存活）
+	HeartbeatInterval time.Duration `json:"heartbeat_interval" yaml:"heartbeat_interval"`
+
+	// ConsumerTimeout 消费者超时时间（超时未心跳则认为死亡）
+	ConsumerTimeout time.Duration `json:"consumer_timeout" yaml:"consumer_timeout"`
 }
 
 // TLSConfig TLS配置
@@ -331,15 +496,32 @@ func DefaultTransportConfig(transportType TransportType) *TransportConfig {
 		EnableEncryption:  false,
 		CodecType:         CodecTypeJSON,
 		PoolSize:          10,
+
+		// MPMC默认配置
+		ConcurrencyMode:   ConcurrencyModeSPSC,         // 默认SPSC模式
+		Role:              RoleBoth,                    // 默认双向
+		ProducerID:        0,                           // 默认生产者ID
+		ConsumerID:        -1,                          // 自动分配
+		ConsumerGroup:     "default",                   // 默认消费者组
+		PartitionCount:    1,                           // 默认1个分区（SPSC）
+		PartitionStrategy: PartitionStrategyRoundRobin, // 默认轮询
+		LoadBalancePolicy: LoadBalancePolicyRoundRobin, // 默认轮询
+		AutoAcknowledge:   true,                        // 默认自动确认
+		AckTimeout:        30 * time.Second,            // 30秒确认超时
+		MaxRetries:        3,                           // 最多重试3次
+		HeartbeatInterval: 5 * time.Second,             // 5秒心跳
+		ConsumerTimeout:   15 * time.Second,            // 15秒超时
 	}
 
 	switch transportType {
 	case TransportTypeSharedMemory:
 		config.ShmPath = "/dev/shm/network-traffic"
 		config.ShmSize = 256 * 1024 * 1024 // 256MB
+		config.CodecType = CodecTypeBinary // 共享内存默认使用Binary编码（零拷贝）
 
 	case TransportTypeGRPC:
 		config.Address = "localhost:50051"
+		config.CodecType = CodecTypeProtobuf // gRPC默认使用Protobuf
 		config.KeepAlive = &KeepAliveConfig{
 			Enabled: true,
 			Time:    30 * time.Second,
@@ -348,6 +530,7 @@ func DefaultTransportConfig(transportType TransportType) *TransportConfig {
 
 	case TransportTypeREST:
 		config.Address = "http://localhost:8080"
+		config.CodecType = CodecTypeJSON // REST默认使用JSON
 		config.KeepAlive = &KeepAliveConfig{
 			Enabled: true,
 			Time:    60 * time.Second,
@@ -356,6 +539,7 @@ func DefaultTransportConfig(transportType TransportType) *TransportConfig {
 
 	case TransportTypeUnix:
 		config.Address = "/tmp/network-traffic.sock"
+		config.CodecType = CodecTypeBinary
 	}
 
 	return config
@@ -422,8 +606,8 @@ func NewTransport(config *TransportConfig) (Transport, error) {
 
 	switch config.Type {
 	case TransportTypeSharedMemory:
-		// TODO: 实现共享内存传输
-		return nil, ErrNotImplemented
+		// 共享内存传输（Linux实现）
+		return newShmTransport(config)
 
 	case TransportTypeGRPC:
 		// TODO: 实现gRPC传输
@@ -496,3 +680,109 @@ func NewClient(config *TransportConfig) (Client, error) {
 
 // 注意：Transport接口包含Close()方法，实现了io.Closer接口
 // 各个具体实现需要保证实现Close()方法
+
+// ===== 配置辅助函数 =====
+
+// NewSPSCConfig 创建SPSC配置（单生产者单消费者，最高性能）
+func NewSPSCConfig(shmPath string) *TransportConfig {
+	config := DefaultTransportConfig(TransportTypeSharedMemory)
+	config.ShmPath = shmPath
+	config.ConcurrencyMode = ConcurrencyModeSPSC
+	config.PartitionCount = 1
+	config.AutoAcknowledge = true
+	return config
+}
+
+// NewMPMCConfig 创建MPMC配置（多生产者多消费者，支持故障恢复）
+func NewMPMCConfig(shmPath string, partitionCount int, consumerGroup string) *TransportConfig {
+	config := DefaultTransportConfig(TransportTypeSharedMemory)
+	config.ShmPath = shmPath
+	config.ConcurrencyMode = ConcurrencyModeMPMC
+	config.PartitionCount = partitionCount
+	config.ConsumerGroup = consumerGroup
+	config.AutoAcknowledge = false // MPMC需要手动确认
+	config.PartitionStrategy = PartitionStrategySticky
+	config.LoadBalancePolicy = LoadBalancePolicyRoundRobin
+	return config
+}
+
+// NewProducerConfig 创建生产者配置
+func NewProducerConfig(baseConfig *TransportConfig, producerID int) *TransportConfig {
+	config := *baseConfig
+	config.Role = RoleProducer
+	config.ProducerID = producerID
+	return &config
+}
+
+// NewConsumerConfig 创建消费者配置
+func NewConsumerConfig(baseConfig *TransportConfig, consumerGroup string) *TransportConfig {
+	config := *baseConfig
+	config.Role = RoleConsumer
+	config.ConsumerGroup = consumerGroup
+	config.ConsumerID = -1 // 自动分配
+	return &config
+}
+
+// Clone 克隆配置
+func (c *TransportConfig) Clone() *TransportConfig {
+	if c == nil {
+		return nil
+	}
+	config := *c
+	if c.TLSConfig != nil {
+		tlsConfig := *c.TLSConfig
+		config.TLSConfig = &tlsConfig
+	}
+	if c.KeepAlive != nil {
+		keepAlive := *c.KeepAlive
+		config.KeepAlive = &keepAlive
+	}
+	return &config
+}
+
+// Validate 验证配置
+func (c *TransportConfig) Validate() error {
+	if c == nil {
+		return ErrInvalidConfig
+	}
+
+	// 验证传输类型
+	switch c.Type {
+	case TransportTypeSharedMemory:
+		if c.ShmPath == "" {
+			return ErrInvalidConfig
+		}
+		if c.ShmSize <= 0 {
+			return ErrInvalidConfig
+		}
+	case TransportTypeGRPC, TransportTypeREST, TransportTypeUnix:
+		if c.Address == "" {
+			return ErrInvalidConfig
+		}
+	default:
+		return ErrUnsupportedTransportType
+	}
+
+	// 验证MPMC配置
+	if c.ConcurrencyMode == ConcurrencyModeMPMC {
+		if c.PartitionCount <= 0 {
+			return ErrInvalidConfig
+		}
+		if c.ConsumerGroup == "" {
+			return ErrInvalidConfig
+		}
+	}
+
+	// 验证超时配置
+	if c.AckTimeout <= 0 {
+		c.AckTimeout = 30 * time.Second
+	}
+	if c.HeartbeatInterval <= 0 {
+		c.HeartbeatInterval = 5 * time.Second
+	}
+	if c.ConsumerTimeout <= 0 {
+		c.ConsumerTimeout = 15 * time.Second
+	}
+
+	return nil
+}

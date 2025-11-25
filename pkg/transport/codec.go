@@ -136,32 +136,7 @@ func (c *gobCodec) ContentType() string {
 	return string(ContentTypeBinary)
 }
 
-// binaryCodec 二进制编解码器（零拷贝优化）
-type binaryCodec struct{}
-
-// NewBinaryCodec 创建二进制编解码器
-func NewBinaryCodec() Codec {
-	return &binaryCodec{}
-}
-
-func (c *binaryCodec) Encode(msg *Message) ([]byte, error) {
-	// TODO: 实现高效的二进制编码（零拷贝）
-	// 使用固定格式的二进制协议
-	return nil, ErrNotImplemented
-}
-
-func (c *binaryCodec) Decode(data []byte) (*Message, error) {
-	// TODO: 实现高效的二进制解码（零拷贝）
-	return nil, ErrNotImplemented
-}
-
-func (c *binaryCodec) Name() string {
-	return string(CodecTypeBinary)
-}
-
-func (c *binaryCodec) ContentType() string {
-	return string(ContentTypeBinary)
-}
+// binaryCodec 二进制编解码器实现在 codec_binary.go 中
 
 // CompressionCodec 压缩编解码器装饰器
 type CompressionCodec struct {
@@ -288,4 +263,10 @@ func (c *EncryptionCodec) Name() string {
 
 func (c *EncryptionCodec) ContentType() string {
 	return c.codec.ContentType()
+}
+
+// init 注册默认编解码器
+func init() {
+	RegisterCodec(CodecTypeJSON, &jsonCodec{})
+	RegisterCodec(CodecTypeBinary, NewBinaryCodec())
 }
