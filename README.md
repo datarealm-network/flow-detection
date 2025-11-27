@@ -22,29 +22,22 @@ pkg/
 └── transport/   # 传输抽象与实现
 ```
 
-## 快速开始
-
-> 需要 Go 1.23+、Linux、具备 root 或 `CAP_NET_RAW` 权限。
-
-```bash
-git clone https://github.com/datarealm-network/flow-detection.git
-cd flow-detection
-go mod download
-
-# 演示：实时打印捕获到的数据包
-sudo go test ./pkg/engine -run TestCapturePackets -v
-```
-
-更改 `engine_test.go` 中的 `config.CaptureConfig.BPFFilter` 即可只捕获 TCP/HTTP/DNS 等不同流量。
 
 ## 测试
 
 ```bash
-# 普通单元测试（无 root）
-go test ./...
 
-# 验证抓包与性能（需 root）
-sudo go test ./pkg/capture ./pkg/engine -v
+cd pkg/engine
+
+
+配置国内镜像
+go env -w GOPROXY=https://goproxy.cn,direct
+go mod tidy
+sudo yum install libpcap-devel
+
+go test 
+
+
 ```
 
 ## 许可证
