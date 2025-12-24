@@ -1,0 +1,22 @@
+# 管控 IP 配置文件示例
+# 支持 YAML 和 JSON 格式
+
+# 是否启用监控
+enabled: true
+
+# 监控目标列表
+targets:
+  # 单 IP 示例
+  - type: ip
+    value: "192.168.1.1"
+  
+  - type: ip
+    value: "10.0.0.5"
+  
+  # CIDR 示例（网段）
+  - type: cidr
+    value: "10.0.0.0/24"
+  
+  - type: cidr
+    value: "172.16.0.0/16"
+
